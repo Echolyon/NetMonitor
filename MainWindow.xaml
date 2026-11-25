@@ -11,7 +11,29 @@
                       Checked="Option_Changed" Unchecked="Option_Changed"/>
             <TextBlock x:Name="StatusText" HorizontalAlignment="Right" VerticalAlignment="Center"/>
         </DockPanel>
-        <DataGrid x:Name="Grid" IsReadOnly="True" AutoGenerateColumns="True"
-                  AlternatingRowBackground="#F4F4F4" GridLinesVisibility="None"/>
+
+        <TabControl>
+            <TabItem Header="Bağlantılar">
+                <DataGrid x:Name="Grid" IsReadOnly="True" AutoGenerateColumns="True"
+                          AlternatingRowBackground="#F4F4F4" GridLinesVisibility="None"/>
+            </TabItem>
+
+            <TabItem Header="Trafik (hız)">
+                <DockPanel>
+                    <TextBlock x:Name="TrafficNote" DockPanel.Dock="Top" Margin="4" Foreground="DarkRed"/>
+                    <DataGrid x:Name="TrafficGrid" IsReadOnly="True" AutoGenerateColumns="False"
+                              AlternatingRowBackground="#F4F4F4" GridLinesVisibility="None">
+                        <DataGrid.Columns>
+                            <DataGridTextColumn Header="Süreç" Binding="{Binding Process}" Width="180"/>
+                            <DataGridTextColumn Header="PID" Binding="{Binding Pid}" Width="70"/>
+                            <DataGridTextColumn Header="İndirme" Binding="{Binding Download}" Width="120"/>
+                            <DataGridTextColumn Header="Yükleme" Binding="{Binding Upload}" Width="120"/>
+                            <DataGridTextColumn Header="Toplam indirilen" Binding="{Binding TotalDownloaded}" Width="130"/>
+                            <DataGridTextColumn Header="Toplam yüklenen" Binding="{Binding TotalUploaded}" Width="130"/>
+                        </DataGrid.Columns>
+                    </DataGrid>
+                </DockPanel>
+            </TabItem>
+        </TabControl>
     </DockPanel>
 </Window>

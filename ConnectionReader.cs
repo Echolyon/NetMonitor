@@ -167,7 +167,7 @@ public static class ConnectionReader
     // Port numarası ağ bayt sırasında (big-endian) gelir, çeviriyoruz.
     private static int Port(int raw) => ((raw & 0xFF) << 8) | ((raw >> 8) & 0xFF);
 
-    private static string GetProcessName(int pid)
+    public static string GetProcessName(int pid)
     {
         if (pid == 0) return "System Idle";
         if (NameCache.TryGetValue(pid, out var cached)) return cached;
