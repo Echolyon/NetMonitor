@@ -18,7 +18,7 @@ public partial class MainWindow : Window
 
     private void Refresh()
     {
-        var connections = ConnectionReader.ReadTcp().AsEnumerable();
+        var connections = ConnectionReader.ReadAll().AsEnumerable();
 
         if (OnlyEstablished.IsChecked == true)
             connections = connections.Where(c => c.State == "ESTABLISHED");
@@ -27,10 +27,11 @@ public partial class MainWindow : Window
         if (filter.Length > 0)
             connections = connections.Where(c =>
                 c.Process.Contains(filter, StringComparison.OrdinalIgnoreCase) ||
+                c.Protocol.Contains(filter, StringComparison.OrdinalIgnoreCase) ||
                 c.Remote.Contains(filter, StringComparison.OrdinalIgnoreCase) ||
                 c.Local.Contains(filter, StringComparison.OrdinalIgnoreCase));
 
-        var list = connections.OrderBy(c => c.Process).ToList();
+        var list = connections.OrderBy(c => c.Process).ThenBy(c => c.Protocol).ToList();
         Grid.ItemsSource = list;
         StatusText.Text = $"{list.Count} bağlantı  |  {DateTime.Now:HH:mm:ss}";
     }
