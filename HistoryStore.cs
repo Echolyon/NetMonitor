@@ -91,13 +91,13 @@ public sealed class HistoryStore
         }
     }
 
-    /// <summary>Satırları kaydeder. Daha önce hiç görülmemiş hedef sayısını döndürür.</summary>
-    public int Record(IReadOnlyList<ConnectionRow> rows)
+    /// <summary>Satırları kaydeder. Daha önce hiç görülmemiş hedeflerin satırlarını döndürür.</summary>
+    public List<ConnectionRow> Record(IReadOnlyList<ConnectionRow> rows)
     {
-        if (Error != null || rows.Count == 0) return 0;
+        if (Error != null || rows.Count == 0) return new List<ConnectionRow>();
 
         long now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
-        int created = 0;
+        var created = new List<ConnectionRow>();
 
         lock (_writeLock)
         {
@@ -158,7 +158,7 @@ public sealed class HistoryStore
                     insert.Parameters.AddWithValue("$signature", row.Signature);
                     insert.Parameters.AddWithValue("$reason", row.Reason);
                     insert.ExecuteNonQuery();
-                    created++;
+                    created.Add(row);
                 }
 
                 tx.Commit();

@@ -33,6 +33,7 @@ public record TrafficRow(
 public partial class MainWindow : Window
 {
     private const string SignaturePending = "Kontrol ediliyor";
+    private const int NotificationWarmupSeconds = 20;
 
     private readonly DispatcherTimer _timer = new() { Interval = TimeSpan.FromSeconds(2) };
     private readonly TrafficMonitor _traffic = new();
@@ -45,6 +46,13 @@ public partial class MainWindow : Window
     private List<ConnectionRow> _lastRows = new();
     private bool _ready;
 
+    // sistem tepsisi
+    private readonly System.Windows.Forms.NotifyIcon _tray = new();
+    private bool _inTray;
+    private bool _trayHintShown;
+    private bool _notificationsOn = true;
+    private readonly DateTime _startedAt = DateTime.UtcNow;
+
     public MainWindow()
     {
         InitializeComponent();
@@ -52,8 +60,13 @@ public partial class MainWindow : Window
         _traffic.Start();
         TrafficNote.Text = _traffic.Error ?? "";
 
+        SetupTray();
+
         Closed += (_, _) =>
         {
+            _timer.Stop();
+            _tray.Visible = false;
+            _tray.Dispose();
             _traffic.Dispose();
             _remote.Dispose();
         };
@@ -67,16 +80,123 @@ public partial class MainWindow : Window
 
     private void Refresh()
     {
-        RefreshConnections();
+        var allRows = CollectRows();
+        RecordHistory(allRows);
+        UpdateTrayText(allRows);
+
+        // Pencere tepsideyken arayüz güncellenmez; kayıt ve bildirimler çalışmaya devam eder.
+        if (_inTray) return;
+
+        ShowConnections(allRows);
         RefreshTraffic();
         RefreshHistory();
     }
 
+    // ------------------------------------------------------------ sistem tepsisi
+
+    private void SetupTray()
+    {
+        try
+        {
+            _tray.Icon = System.Drawing.Icon.ExtractAssociatedIcon(Environment.ProcessPath!)
+                         ?? System.Drawing.SystemIcons.Application;
+        }
+        catch
+        {
+            _tray.Icon = System.Drawing.SystemIcons.Application;
+        }
+
+        _tray.Text = "NetMonitor";
+
+        var menu = new System.Windows.Forms.ContextMenuStrip();
+        menu.Items.Add("Aç", null, (_, _) => ShowFromTray());
+
+        var notifyItem = new System.Windows.Forms.ToolStripMenuItem("Bildirimler")
+        {
+            Checked = true,
+            CheckOnClick = true
+        };
+        notifyItem.CheckedChanged += (_, _) => _notificationsOn = notifyItem.Checked;
+        menu.Items.Add(notifyItem);
+
+        menu.Items.Add(new System.Windows.Forms.ToolStripSeparator());
+        menu.Items.Add("Çıkış", null, (_, _) => Close());
+
+        _tray.ContextMenuStrip = menu;
+        _tray.DoubleClick += (_, _) => ShowFromTray();
+        _tray.BalloonTipClicked += (_, _) => ShowFromTray();
+        _tray.Visible = true;
+    }
+
+    protected override void OnStateChanged(EventArgs e)
+    {
+        base.OnStateChanged(e);
+
+        // Küçültünce görev çubuğundan kalkıp tepsiye iner. (X düğmesi uygulamayı kapatır.)
+        if (WindowState == WindowState.Minimized)
+        {
+            _inTray = true;
+            Hide();
+
+            if (!_trayHintShown)
+            {
+                _trayHintShown = true;
+                _tray.ShowBalloonTip(4000, "NetMonitor",
+                    "Arka planda çalışmaya devam ediyor. Açmak için simgeye çift tıkla, kapatmak için sağ tıkla > Çıkış.",
+                    System.Windows.Forms.ToolTipIcon.Info);
+            }
+        }
+    }
+
+    private void ShowFromTray()
+    {
+        _inTray = false;
+        Show();
+        WindowState = WindowState.Normal;
+        Activate();
+        Refresh();
+    }
+
+    private void UpdateTrayText(List<ConnectionRow> rows)
+    {
+        int risky = rows.Count(r => r.Risk != "Düşük");
+        // NotifyIcon.Text en fazla 63 karakter olabilir.
+        _tray.Text = risky > 0 ? $"NetMonitor - {risky} riskli bağlantı" : "NetMonitor";
+    }
+
+    private void NotifyNewRisky(List<ConnectionRow> created)
+    {
+        if (!_notificationsOn) return;
+        if ((DateTime.UtcNow - _startedAt).TotalSeconds < NotificationWarmupSeconds) return;
+
+        var risky = created.Where(r => r.Risk != "Düşük").ToList();
+        if (risky.Count == 0) return;
+
+        string title;
+        string text;
+        if (risky.Count == 1)
+        {
+            var r = risky[0];
+            title = $"Yeni riskli bağlantı ({r.Risk})";
+            text = $"{r.Process} → {r.Remote} ({r.Country})";
+            if (r.Reason.Length > 0) text += "\n" + r.Reason;
+        }
+        else
+        {
+            title = $"{risky.Count} yeni riskli bağlantı";
+            text = string.Join("\n", risky.Take(3).Select(r => $"{r.Process} → {r.Remote}"));
+            if (risky.Count > 3) text += $"\n... ve {risky.Count - 3} tane daha";
+        }
+
+        if (text.Length > 250) text = text.Substring(0, 247) + "...";
+        _tray.ShowBalloonTip(6000, title, text, System.Windows.Forms.ToolTipIcon.Warning);
+    }
+
     // ------------------------------------------------------------ bağlantılar
 
-    private void RefreshConnections()
+    private List<ConnectionRow> CollectRows()
     {
-        var allRows = ConnectionReader.ReadAll().Select(c =>
+        return ConnectionReader.ReadAll().Select(c =>
         {
             var ip = RemoteInfoService.ExtractIp(c.Remote);
             string country = ip == null ? "" : _remote.GetCountry(ip);
@@ -90,7 +210,10 @@ public partial class MainWindow : Window
                 c.Protocol, c.Process, c.Pid, c.Local, c.Remote, country, host, c.State,
                 risk.Level, path == null ? "-" : SignatureText(signature), risk.Reason, path ?? "");
         }).ToList();
+    }
 
+    private void RecordHistory(List<ConnectionRow> allRows)
+    {
         // Geçmişe, ekrandaki filtrelerden bağımsız olarak tüm dış bağlantılar yazılır.
         // İmzası henüz kontrol edilen satırlar bir sonraki yenilemeye bırakılır
         // (puan eksik hesaplanıp kaydedilmesin diye).
@@ -99,9 +222,18 @@ public partial class MainWindow : Window
                         && r.Country != "" && r.Country != "yerel"
                         && r.Signature != SignaturePending)
             .ToList();
-        if (toRecord.Count > 0)
-            _ = Task.Run(() => _history.Record(toRecord));
+        if (toRecord.Count == 0) return;
 
+        _ = Task.Run(() =>
+        {
+            var created = _history.Record(toRecord);
+            if (created.Count > 0)
+                Dispatcher.InvokeAsync(() => NotifyNewRisky(created));
+        });
+    }
+
+    private void ShowConnections(List<ConnectionRow> allRows)
+    {
         var rows = allRows.AsEnumerable();
 
         string protocol = (ProtocolBox.SelectedItem as ComboBoxItem)?.Content as string ?? "Tümü";
