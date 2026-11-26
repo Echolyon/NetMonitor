@@ -27,7 +27,7 @@
             <TextBlock x:Name="StatusText" HorizontalAlignment="Right" VerticalAlignment="Center"/>
         </DockPanel>
 
-        <TabControl>
+        <TabControl x:Name="Tabs" SelectionChanged="Tabs_SelectionChanged">
             <TabItem Header="Bağlantılar">
                 <DataGrid x:Name="Grid" IsReadOnly="True" AutoGenerateColumns="True"
                           AlternatingRowBackground="#F4F4F4" GridLinesVisibility="None"
@@ -66,6 +66,50 @@
                             <DataGridTextColumn Header="Yükleme" Binding="{Binding Upload}" Width="120"/>
                             <DataGridTextColumn Header="Toplam indirilen" Binding="{Binding TotalDownloaded}" Width="130"/>
                             <DataGridTextColumn Header="Toplam yüklenen" Binding="{Binding TotalUploaded}" Width="130"/>
+                        </DataGrid.Columns>
+                    </DataGrid>
+                </DockPanel>
+            </TabItem>
+
+            <TabItem x:Name="HistoryTab" Header="Geçmiş">
+                <DockPanel>
+                    <DockPanel DockPanel.Dock="Top" Margin="0,6,0,6">
+                        <TextBlock Text="Dönem:" VerticalAlignment="Center" Margin="4,0,6,0"/>
+                        <ComboBox x:Name="PeriodBox" Width="110" SelectedIndex="1" SelectionChanged="Option_Changed">
+                            <ComboBoxItem Content="Son 1 saat"/>
+                            <ComboBoxItem Content="Son 24 saat"/>
+                            <ComboBoxItem Content="Son 7 gün"/>
+                            <ComboBoxItem Content="Son 30 gün"/>
+                        </ComboBox>
+                        <Button Content="Geçmişi temizle" Margin="12,0,0,0" Padding="10,2" Click="ClearHistory_Click"/>
+                        <TextBlock x:Name="HistoryStatus" VerticalAlignment="Center" Margin="12,0,0,0"/>
+                    </DockPanel>
+                    <DataGrid x:Name="HistoryGrid" IsReadOnly="True" AutoGenerateColumns="False"
+                              AlternatingRowBackground="#F4F4F4" GridLinesVisibility="None">
+                        <DataGrid.RowStyle>
+                            <Style TargetType="DataGridRow">
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding Risk}" Value="Yüksek">
+                                        <Setter Property="Background" Value="#FFD6D6"/>
+                                    </DataTrigger>
+                                    <DataTrigger Binding="{Binding Risk}" Value="Orta">
+                                        <Setter Property="Background" Value="#FFF1C9"/>
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </DataGrid.RowStyle>
+                        <DataGrid.Columns>
+                            <DataGridTextColumn Header="İlk görülme" Binding="{Binding FirstSeen}" Width="140"/>
+                            <DataGridTextColumn Header="Son görülme" Binding="{Binding LastSeen}" Width="140"/>
+                            <DataGridTextColumn Header="Süreç" Binding="{Binding Process}" Width="130"/>
+                            <DataGridTextColumn Header="Protokol" Binding="{Binding Protocol}" Width="70"/>
+                            <DataGridTextColumn Header="Hedef" Binding="{Binding Destination}" Width="170"/>
+                            <DataGridTextColumn Header="Ülke" Binding="{Binding Country}" Width="50"/>
+                            <DataGridTextColumn Header="Host" Binding="{Binding Host}" Width="200"/>
+                            <DataGridTextColumn Header="Risk" Binding="{Binding Risk}" Width="60"/>
+                            <DataGridTextColumn Header="İmza" Binding="{Binding Signature}" Width="80"/>
+                            <DataGridTextColumn Header="Neden" Binding="{Binding Reason}" Width="250"/>
+                            <DataGridTextColumn Header="Yol" Binding="{Binding Path}" Width="300"/>
                         </DataGrid.Columns>
                     </DataGrid>
                 </DockPanel>

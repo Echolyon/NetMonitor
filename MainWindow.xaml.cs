@@ -32,10 +32,13 @@ public record TrafficRow(
 
 public partial class MainWindow : Window
 {
+    private const string SignaturePending = "Kontrol ediliyor";
+
     private readonly DispatcherTimer _timer = new() { Interval = TimeSpan.FromSeconds(2) };
     private readonly TrafficMonitor _traffic = new();
     private readonly RemoteInfoService _remote = new();
     private readonly ProcessInfoService _procInfo = new();
+    private readonly HistoryStore _history = new();
 
     private Dictionary<int, (long Sent, long Received)> _prev = new();
     private DateTime _prevTime = DateTime.UtcNow;
@@ -66,13 +69,14 @@ public partial class MainWindow : Window
     {
         RefreshConnections();
         RefreshTraffic();
+        RefreshHistory();
     }
 
     // ------------------------------------------------------------ bağlantılar
 
     private void RefreshConnections()
     {
-        var rows = ConnectionReader.ReadAll().Select(c =>
+        var allRows = ConnectionReader.ReadAll().Select(c =>
         {
             var ip = RemoteInfoService.ExtractIp(c.Remote);
             string country = ip == null ? "" : _remote.GetCountry(ip);
@@ -85,7 +89,20 @@ public partial class MainWindow : Window
             return new ConnectionRow(
                 c.Protocol, c.Process, c.Pid, c.Local, c.Remote, country, host, c.State,
                 risk.Level, path == null ? "-" : SignatureText(signature), risk.Reason, path ?? "");
-        }).AsEnumerable();
+        }).ToList();
+
+        // Geçmişe, ekrandaki filtrelerden bağımsız olarak tüm dış bağlantılar yazılır.
+        // İmzası henüz kontrol edilen satırlar bir sonraki yenilemeye bırakılır
+        // (puan eksik hesaplanıp kaydedilmesin diye).
+        var toRecord = allRows
+            .Where(r => r.State == "ESTABLISHED"
+                        && r.Country != "" && r.Country != "yerel"
+                        && r.Signature != SignaturePending)
+            .ToList();
+        if (toRecord.Count > 0)
+            _ = Task.Run(() => _history.Record(toRecord));
+
+        var rows = allRows.AsEnumerable();
 
         string protocol = (ProtocolBox.SelectedItem as ComboBoxItem)?.Content as string ?? "Tümü";
         if (protocol != "Tümü")
@@ -144,7 +161,7 @@ public partial class MainWindow : Window
         SignatureState.Unsigned => "İmzasız",
         SignatureState.Invalid => "Bozuk",
         SignatureState.WindowsFile => "Windows",
-        SignatureState.Pending => "Kontrol ediliyor",
+        SignatureState.Pending => SignaturePending,
         _ => "Doğrulanamadı"
     };
 
@@ -204,6 +221,68 @@ public partial class MainWindow : Window
 
     private static string FormatSpeed(double bytesPerSecond) =>
         bytesPerSecond < 1 ? "-" : FormatBytes((long)bytesPerSecond) + "/s";
+
+    // ------------------------------------------------------------------ geçmiş
+
+    private void RefreshHistory()
+    {
+        if (!HistoryTab.IsSelected) return;
+
+        if (_history.Error != null)
+        {
+            HistoryStatus.Text = _history.Error;
+            return;
+        }
+
+        long seconds = PeriodBox.SelectedIndex switch
+        {
+            0 => 3600,
+            1 => 86400,
+            2 => 7 * 86400,
+            _ => 30 * 86400
+        };
+        long since = DateTimeOffset.UtcNow.ToUnixTimeSeconds() - seconds;
+
+        var entries = _history.Query(since, OnlyRisky.IsChecked == true).AsEnumerable();
+
+        string filter = FilterBox.Text.Trim();
+        if (filter.Length > 0)
+            entries = entries.Where(e =>
+                e.Process.Contains(filter, StringComparison.OrdinalIgnoreCase) ||
+                e.Destination.Contains(filter, StringComparison.OrdinalIgnoreCase) ||
+                e.Country.Contains(filter, StringComparison.OrdinalIgnoreCase) ||
+                e.Host.Contains(filter, StringComparison.OrdinalIgnoreCase) ||
+                e.Path.Contains(filter, StringComparison.OrdinalIgnoreCase));
+
+        var list = entries.ToList();
+
+        var scroll = FindScrollViewer(HistoryGrid);
+        double offset = scroll?.VerticalOffset ?? 0;
+
+        HistoryGrid.ItemsSource = list;
+        HistoryGrid.UpdateLayout();
+        scroll?.ScrollToVerticalOffset(offset);
+
+        HistoryStatus.Text = $"{list.Count} hedef  |  {HistoryStore.RetentionDays} gün saklanır  |  {_history.DbPath}";
+    }
+
+    private void ClearHistory_Click(object sender, RoutedEventArgs e)
+    {
+        var answer = MessageBox.Show(
+            "Tüm bağlantı geçmişi silinecek. Devam edilsin mi?",
+            "NetMonitor", MessageBoxButton.YesNo, MessageBoxImage.Question);
+        if (answer != MessageBoxResult.Yes) return;
+
+        _history.Clear();
+        RefreshHistory();
+    }
+
+    private void Tabs_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        // İçteki ComboBox'ların SelectionChanged olayı da buraya yükselir; onları atla.
+        if (!ReferenceEquals(e.Source, Tabs)) return;
+        if (_ready) RefreshHistory();
+    }
 
     // ------------------------------------------------------- sağ tık menüsü
 
