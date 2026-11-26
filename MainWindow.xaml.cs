@@ -35,11 +35,12 @@ public partial class MainWindow : Window
     private const string SignaturePending = "Kontrol ediliyor";
     private const int NotificationWarmupSeconds = 20;
 
-    private readonly DispatcherTimer _timer = new() { Interval = TimeSpan.FromSeconds(2) };
+    private readonly DispatcherTimer _timer = new();
     private readonly TrafficMonitor _traffic = new();
     private readonly RemoteInfoService _remote = new();
     private readonly ProcessInfoService _procInfo = new();
-    private readonly HistoryStore _history = new();
+    private readonly HistoryStore _history;
+    private AppSettings _settings;
 
     private Dictionary<int, (long Sent, long Received)> _prev = new();
     private DateTime _prevTime = DateTime.UtcNow;
@@ -51,10 +52,16 @@ public partial class MainWindow : Window
     private bool _inTray;
     private bool _trayHintShown;
     private bool _notificationsOn = true;
+    private System.Windows.Forms.ToolStripMenuItem? _notifyItem;
     private readonly DateTime _startedAt = DateTime.UtcNow;
 
     public MainWindow()
     {
+        _settings = AppSettings.Load();
+        _history = new HistoryStore(_settings.RetentionDays);
+        _notificationsOn = _settings.NotificationsOn;
+        _timer.Interval = TimeSpan.FromSeconds(_settings.RefreshSeconds);
+
         InitializeComponent();
 
         _traffic.Start();
@@ -111,12 +118,24 @@ public partial class MainWindow : Window
         var menu = new System.Windows.Forms.ContextMenuStrip();
         menu.Items.Add("Aç", null, (_, _) => ShowFromTray());
 
+        menu.Items.Add("Ayarlar...", null, (_, _) =>
+        {
+            ShowFromTray();
+            OpenSettings();
+        });
+
         var notifyItem = new System.Windows.Forms.ToolStripMenuItem("Bildirimler")
         {
-            Checked = true,
+            Checked = _notificationsOn,
             CheckOnClick = true
         };
-        notifyItem.CheckedChanged += (_, _) => _notificationsOn = notifyItem.Checked;
+        notifyItem.CheckedChanged += (_, _) =>
+        {
+            _notificationsOn = notifyItem.Checked;
+            _settings.NotificationsOn = _notificationsOn;
+            _settings.Save();
+        };
+        _notifyItem = notifyItem;
         menu.Items.Add(notifyItem);
 
         menu.Items.Add(new System.Windows.Forms.ToolStripSeparator());
@@ -148,7 +167,7 @@ public partial class MainWindow : Window
         }
     }
 
-    private void ShowFromTray()
+    public void ShowFromTray()
     {
         _inTray = false;
         Show();
@@ -169,7 +188,10 @@ public partial class MainWindow : Window
         if (!_notificationsOn) return;
         if ((DateTime.UtcNow - _startedAt).TotalSeconds < NotificationWarmupSeconds) return;
 
-        var risky = created.Where(r => r.Risk != "Düşük").ToList();
+        bool onlyHigh = _settings.NotifyMinLevel == "Yüksek";
+        var risky = created
+            .Where(r => r.Risk == "Yüksek" || (!onlyHigh && r.Risk == "Orta"))
+            .ToList();
         if (risky.Count == 0) return;
 
         string title;
@@ -395,7 +417,7 @@ public partial class MainWindow : Window
         HistoryGrid.UpdateLayout();
         scroll?.ScrollToVerticalOffset(offset);
 
-        HistoryStatus.Text = $"{list.Count} hedef  |  {HistoryStore.RetentionDays} gün saklanır  |  {_history.DbPath}";
+        HistoryStatus.Text = $"{list.Count} hedef  |  {_history.RetentionDays} gün saklanır  |  {_history.DbPath}";
     }
 
     private void ClearHistory_Click(object sender, RoutedEventArgs e)
@@ -493,6 +515,29 @@ public partial class MainWindow : Window
     }
 
     private static string Csv(string value) => "\"" + value.Replace("\"", "\"\"") + "\"";
+
+    // ---------------------------------------------------------------- ayarlar
+
+    private void Settings_Click(object sender, RoutedEventArgs e) => OpenSettings();
+
+    private void OpenSettings()
+    {
+        var dialog = new SettingsWindow(_settings, _remote.GeoAvailable, _history.DbPath) { Owner = this };
+        if (dialog.ShowDialog() != true) return;
+
+        _settings = dialog.Result;
+        _settings.Save();
+        ApplySettings();
+    }
+
+    private void ApplySettings()
+    {
+        _timer.Interval = TimeSpan.FromSeconds(_settings.RefreshSeconds);
+        _notificationsOn = _settings.NotificationsOn;
+        if (_notifyItem != null) _notifyItem.Checked = _notificationsOn;
+        _history.SetRetention(_settings.RetentionDays);
+        Refresh();
+    }
 
     // ------------------------------------------------------------ yardımcılar
 

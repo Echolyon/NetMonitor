@@ -24,7 +24,8 @@ public record HistoryEntry(
 /// </summary>
 public sealed class HistoryStore
 {
-    public const int RetentionDays = 30;
+    /// <summary>Kayıtların saklanma süresi (gün). Ayarlardan gelir.</summary>
+    public int RetentionDays { get; private set; }
 
     private readonly string _connectionString;
     private readonly object _writeLock = new();
@@ -34,8 +35,9 @@ public sealed class HistoryStore
     /// <summary>Veritabanı hiç açılamadıysa hata metni.</summary>
     public string? Error { get; private set; }
 
-    public HistoryStore()
+    public HistoryStore(int retentionDays)
     {
+        RetentionDays = retentionDays;
         string dir = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "NetMonitor");
         DbPath = Path.Combine(dir, "history.db");
@@ -222,6 +224,28 @@ public sealed class HistoryStore
         }
 
         return result;
+    }
+
+    /// <summary>Saklama süresini değiştirir ve süresi dolan kayıtları hemen siler.</summary>
+    public void SetRetention(int days)
+    {
+        RetentionDays = days;
+        if (Error != null) return;
+
+        lock (_writeLock)
+        {
+            try
+            {
+                using var conn = new SqliteConnection(_connectionString);
+                conn.Open();
+                using var cmd = conn.CreateCommand();
+                cmd.CommandText = "DELETE FROM destinations WHERE last_seen < $cutoff";
+                cmd.Parameters.AddWithValue("$cutoff",
+                    DateTimeOffset.UtcNow.AddDays(-days).ToUnixTimeSeconds());
+                cmd.ExecuteNonQuery();
+            }
+            catch { }
+        }
     }
 
     public void Clear()

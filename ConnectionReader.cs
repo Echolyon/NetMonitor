@@ -43,7 +43,8 @@ public static class ConnectionReader
         "TIME_WAIT", "DELETE_TCB"
     };
 
-    private static readonly Dictionary<int, string> NameCache = new();
+    private static readonly Dictionary<int, (string Name, DateTime At)> NameCache = new();
+    private static readonly object NameLock = new();
 
     public static List<ConnectionInfo> ReadAll()
     {
@@ -170,13 +171,22 @@ public static class ConnectionReader
     public static string GetProcessName(int pid)
     {
         if (pid == 0) return "System Idle";
-        if (NameCache.TryGetValue(pid, out var cached)) return cached;
+        lock (NameLock)
+        {
+            // PID'ler yeniden kullanılabildiği için önbellek 60 saniye sonra yenilenir.
+            if (NameCache.TryGetValue(pid, out var cached) && (DateTime.UtcNow - cached.At).TotalSeconds < 60)
+                return cached.Name;
+        }
 
         string name;
-        try { name = Process.GetProcessById(pid).ProcessName; }
+        try
+        {
+            using var process = Process.GetProcessById(pid);
+            name = process.ProcessName;
+        }
         catch { name = "(bilinmiyor)"; }
 
-        NameCache[pid] = name;
+        lock (NameLock) { NameCache[pid] = (name, DateTime.UtcNow); }
         return name;
     }
 }
