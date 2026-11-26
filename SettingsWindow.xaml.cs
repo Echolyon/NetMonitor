@@ -24,7 +24,7 @@ public partial class SettingsWindow : Window
         NotifyCheck.IsChecked = current.NotificationsOn;
 
         string version = Assembly.GetExecutingAssembly().GetName().Version?.ToString(3) ?? "?";
-        AboutText.Text = $"NetMonitor {version} - verileriniz yalnızca bu bilgisayarda tutulur, dışarı gönderilmez.";
+        AboutText.Text = $"NetMonitor {version} - geçmiş ve ayarlar yalnızca bu bilgisayarda tutulur. Host adları için sistemin DNS sunucusuna ters DNS sorgusu gönderilir.";
         GeoText.Text = geoAvailable
             ? "GeoIP veritabanı: yüklü"
             : "GeoIP veritabanı: bulunamadı (GeoIP klasörüne bir .mmdb dosyası ekleyin)";
