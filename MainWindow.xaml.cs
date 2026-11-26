@@ -4,6 +4,16 @@ using System.Windows.Threading;
 
 namespace NetMonitor;
 
+public record ConnectionRow(
+    string Protocol,
+    string Process,
+    int Pid,
+    string Local,
+    string Remote,
+    string Country,
+    string Host,
+    string State);
+
 public record TrafficRow(
     string Process,
     int Pid,
@@ -16,6 +26,7 @@ public partial class MainWindow : Window
 {
     private readonly DispatcherTimer _timer = new() { Interval = TimeSpan.FromSeconds(2) };
     private readonly TrafficMonitor _traffic = new();
+    private readonly RemoteInfoService _remote = new();
 
     private Dictionary<int, (long Sent, long Received)> _prev = new();
     private DateTime _prevTime = DateTime.UtcNow;
@@ -27,7 +38,12 @@ public partial class MainWindow : Window
         _traffic.Start();
         TrafficNote.Text = _traffic.Error ?? "";
 
-        Closed += (_, _) => _traffic.Dispose();
+        Closed += (_, _) =>
+        {
+            _traffic.Dispose();
+            _remote.Dispose();
+        };
+
         _timer.Tick += (_, _) => Refresh();
         _timer.Start();
         Refresh();
@@ -41,22 +57,32 @@ public partial class MainWindow : Window
 
     private void RefreshConnections()
     {
-        var connections = ConnectionReader.ReadAll().AsEnumerable();
+        var rows = ConnectionReader.ReadAll().Select(c =>
+        {
+            var ip = RemoteInfoService.ExtractIp(c.Remote);
+            string country = ip == null ? "" : _remote.GetCountry(ip);
+            string host = ip == null ? "" : _remote.GetHost(ip);
+            return new ConnectionRow(c.Protocol, c.Process, c.Pid, c.Local, c.Remote, country, host, c.State);
+        }).AsEnumerable();
 
         if (OnlyEstablished.IsChecked == true)
-            connections = connections.Where(c => c.State == "ESTABLISHED");
+            rows = rows.Where(r => r.State == "ESTABLISHED");
 
         string filter = FilterBox.Text.Trim();
         if (filter.Length > 0)
-            connections = connections.Where(c =>
-                c.Process.Contains(filter, StringComparison.OrdinalIgnoreCase) ||
-                c.Protocol.Contains(filter, StringComparison.OrdinalIgnoreCase) ||
-                c.Remote.Contains(filter, StringComparison.OrdinalIgnoreCase) ||
-                c.Local.Contains(filter, StringComparison.OrdinalIgnoreCase));
+            rows = rows.Where(r =>
+                r.Process.Contains(filter, StringComparison.OrdinalIgnoreCase) ||
+                r.Protocol.Contains(filter, StringComparison.OrdinalIgnoreCase) ||
+                r.Remote.Contains(filter, StringComparison.OrdinalIgnoreCase) ||
+                r.Local.Contains(filter, StringComparison.OrdinalIgnoreCase) ||
+                r.Country.Contains(filter, StringComparison.OrdinalIgnoreCase) ||
+                r.Host.Contains(filter, StringComparison.OrdinalIgnoreCase));
 
-        var list = connections.OrderBy(c => c.Process).ThenBy(c => c.Protocol).ToList();
+        var list = rows.OrderBy(r => r.Process).ThenBy(r => r.Protocol).ToList();
         Grid.ItemsSource = list;
-        StatusText.Text = $"{list.Count} bağlantı  |  {DateTime.Now:HH:mm:ss}";
+
+        string geoNote = _remote.GeoAvailable ? "" : "  |  GeoIP veritabanı yok";
+        StatusText.Text = $"{list.Count} bağlantı  |  {DateTime.Now:HH:mm:ss}{geoNote}";
     }
 
     private void RefreshTraffic()
