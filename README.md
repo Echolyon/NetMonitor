@@ -5,8 +5,8 @@ A lightweight, local-only **per-process network monitor for Windows**. It shows 
 > The user interface is currently **Turkish only** (English UI is planned). Türkçe açıklama: [README.tr.md](README.tr.md)
 
 <!-- Add your screenshots to docs/ and keep these lines -->
-![Connections](docs/connections.png)
-![History](docs/history.png)
+<!-- ![Connections](docs/connections.png) -->
+<!-- ![History](docs/history.png) -->
 
 ## Features
 
