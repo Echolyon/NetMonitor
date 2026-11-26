@@ -4,8 +4,8 @@ Windows için hafif, tamamen yerel çalışan **süreç bazlı ağ trafiği izle
 
 English: [README.md](README.md)
 
-![Bağlantılar](docs/connections.png)
-![Geçmiş](docs/history.png)
+<!-- ![Bağlantılar](docs/connections.png) -->
+<!-- ![Geçmiş](docs/history.png) -->
 
 ## Özellikler
 
