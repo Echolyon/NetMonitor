@@ -1,5 +1,9 @@
+using System.IO;
+using System.Text;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Input;
+using System.Windows.Media;
 using System.Windows.Threading;
 
 namespace NetMonitor;
@@ -12,7 +16,11 @@ public record ConnectionRow(
     string Remote,
     string Country,
     string Host,
-    string State);
+    string State,
+    string Risk,
+    string Signature,
+    string Reason,
+    string Path);
 
 public record TrafficRow(
     string Process,
@@ -27,9 +35,12 @@ public partial class MainWindow : Window
     private readonly DispatcherTimer _timer = new() { Interval = TimeSpan.FromSeconds(2) };
     private readonly TrafficMonitor _traffic = new();
     private readonly RemoteInfoService _remote = new();
+    private readonly ProcessInfoService _procInfo = new();
 
     private Dictionary<int, (long Sent, long Received)> _prev = new();
     private DateTime _prevTime = DateTime.UtcNow;
+    private List<ConnectionRow> _lastRows = new();
+    private bool _ready;
 
     public MainWindow()
     {
@@ -46,6 +57,8 @@ public partial class MainWindow : Window
 
         _timer.Tick += (_, _) => Refresh();
         _timer.Start();
+
+        _ready = true;
         Refresh();
     }
 
@@ -55,6 +68,8 @@ public partial class MainWindow : Window
         RefreshTraffic();
     }
 
+    // ------------------------------------------------------------ bağlantılar
+
     private void RefreshConnections()
     {
         var rows = ConnectionReader.ReadAll().Select(c =>
@@ -62,11 +77,25 @@ public partial class MainWindow : Window
             var ip = RemoteInfoService.ExtractIp(c.Remote);
             string country = ip == null ? "" : _remote.GetCountry(ip);
             string host = ip == null ? "" : _remote.GetHost(ip);
-            return new ConnectionRow(c.Protocol, c.Process, c.Pid, c.Local, c.Remote, country, host, c.State);
+
+            string? path = _procInfo.GetPath(c.Pid);
+            var signature = path == null ? SignatureState.Unknown : _procInfo.GetSignature(path);
+            var risk = RiskScorer.Evaluate(c.Process, path, signature, c.Protocol, c.State, c.Remote);
+
+            return new ConnectionRow(
+                c.Protocol, c.Process, c.Pid, c.Local, c.Remote, country, host, c.State,
+                risk.Level, path == null ? "-" : SignatureText(signature), risk.Reason, path ?? "");
         }).AsEnumerable();
+
+        string protocol = (ProtocolBox.SelectedItem as ComboBoxItem)?.Content as string ?? "Tümü";
+        if (protocol != "Tümü")
+            rows = rows.Where(r => r.Protocol == protocol);
 
         if (OnlyEstablished.IsChecked == true)
             rows = rows.Where(r => r.State == "ESTABLISHED");
+
+        if (OnlyRisky.IsChecked == true)
+            rows = rows.Where(r => r.Risk != "Düşük");
 
         string filter = FilterBox.Text.Trim();
         if (filter.Length > 0)
@@ -76,14 +105,50 @@ public partial class MainWindow : Window
                 r.Remote.Contains(filter, StringComparison.OrdinalIgnoreCase) ||
                 r.Local.Contains(filter, StringComparison.OrdinalIgnoreCase) ||
                 r.Country.Contains(filter, StringComparison.OrdinalIgnoreCase) ||
-                r.Host.Contains(filter, StringComparison.OrdinalIgnoreCase));
+                r.Host.Contains(filter, StringComparison.OrdinalIgnoreCase) ||
+                r.Path.Contains(filter, StringComparison.OrdinalIgnoreCase));
 
-        var list = rows.OrderBy(r => r.Process).ThenBy(r => r.Protocol).ToList();
+        var list = rows
+            .OrderByDescending(r => r.Risk == "Yüksek" ? 2 : r.Risk == "Orta" ? 1 : 0)
+            .ThenBy(r => r.Process)
+            .ThenBy(r => r.Protocol)
+            .ToList();
+
+        // Yenilemede kaydırma konumu ve seçili satır korunur.
+        var scroll = FindScrollViewer(Grid);
+        double offset = scroll?.VerticalOffset ?? 0;
+        string? selectedKey = (Grid.SelectedItem as ConnectionRow) is { } sel ? RowKey(sel) : null;
+
         Grid.ItemsSource = list;
+        Grid.UpdateLayout();
 
+        if (selectedKey != null)
+        {
+            var again = list.FirstOrDefault(r => RowKey(r) == selectedKey);
+            if (again != null) Grid.SelectedItem = again;
+        }
+        scroll?.ScrollToVerticalOffset(offset);
+
+        _lastRows = list;
+
+        int risky = list.Count(r => r.Risk != "Düşük");
         string geoNote = _remote.GeoAvailable ? "" : "  |  GeoIP veritabanı yok";
-        StatusText.Text = $"{list.Count} bağlantı  |  {DateTime.Now:HH:mm:ss}{geoNote}";
+        StatusText.Text = $"{list.Count} bağlantı  |  {risky} riskli  |  {DateTime.Now:HH:mm:ss}{geoNote}";
     }
+
+    private static string RowKey(ConnectionRow r) => $"{r.Protocol}|{r.Pid}|{r.Local}|{r.Remote}";
+
+    private static string SignatureText(SignatureState s) => s switch
+    {
+        SignatureState.Signed => "İmzalı",
+        SignatureState.Unsigned => "İmzasız",
+        SignatureState.Invalid => "Bozuk",
+        SignatureState.WindowsFile => "Windows",
+        SignatureState.Pending => "Kontrol ediliyor",
+        _ => "Doğrulanamadı"
+    };
+
+    // ------------------------------------------------------------------ trafik
 
     private void RefreshTraffic()
     {
@@ -117,7 +182,12 @@ public partial class MainWindow : Window
             .Select(x => x.Row)
             .ToList();
 
+        var scroll = FindScrollViewer(TrafficGrid);
+        double offset = scroll?.VerticalOffset ?? 0;
+
         TrafficGrid.ItemsSource = rows;
+        TrafficGrid.UpdateLayout();
+        scroll?.ScrollToVerticalOffset(offset);
 
         _prev = now;
         _prevTime = nowTime;
@@ -135,6 +205,115 @@ public partial class MainWindow : Window
     private static string FormatSpeed(double bytesPerSecond) =>
         bytesPerSecond < 1 ? "-" : FormatBytes((long)bytesPerSecond) + "/s";
 
-    private void FilterBox_TextChanged(object sender, TextChangedEventArgs e) => Refresh();
-    private void Option_Changed(object sender, RoutedEventArgs e) => Refresh();
+    // ------------------------------------------------------- sağ tık menüsü
+
+    private void Grid_PreviewMouseRightButtonDown(object sender, MouseButtonEventArgs e)
+    {
+        var row = FindAncestor<DataGridRow>(e.OriginalSource as DependencyObject);
+        if (row != null)
+        {
+            row.IsSelected = true;
+            row.Focus();
+        }
+    }
+
+    private void CopyRemoteIp_Click(object sender, RoutedEventArgs e)
+    {
+        if (Grid.SelectedItem is not ConnectionRow r) return;
+        var ip = RemoteInfoService.ExtractIp(r.Remote);
+        Clipboard.SetText(ip?.ToString() ?? r.Remote);
+    }
+
+    private void CopyRow_Click(object sender, RoutedEventArgs e)
+    {
+        if (Grid.SelectedItem is not ConnectionRow r) return;
+        Clipboard.SetText(string.Join("\t",
+            r.Protocol, r.Process, r.Pid, r.Local, r.Remote, r.Country, r.Host,
+            r.State, r.Risk, r.Signature, r.Reason, r.Path));
+    }
+
+    private void OpenFolder_Click(object sender, RoutedEventArgs e)
+    {
+        if (Grid.SelectedItem is not ConnectionRow r || r.Path.Length == 0 || !File.Exists(r.Path))
+            return;
+
+        System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+        {
+            FileName = "explorer.exe",
+            Arguments = $"/select,\"{r.Path}\"",
+            UseShellExecute = true
+        });
+    }
+
+    // ------------------------------------------------------------- CSV dışa aktarma
+
+    private void Export_Click(object sender, RoutedEventArgs e)
+    {
+        if (_lastRows.Count == 0) return;
+
+        var dialog = new Microsoft.Win32.SaveFileDialog
+        {
+            Filter = "CSV dosyası (*.csv)|*.csv",
+            FileName = $"netmonitor-{DateTime.Now:yyyyMMdd-HHmmss}.csv"
+        };
+        if (dialog.ShowDialog() != true) return;
+
+        var sb = new StringBuilder();
+        sb.AppendLine("Protocol;Process;Pid;Local;Remote;Country;Host;State;Risk;Signature;Reason;Path");
+        foreach (var r in _lastRows)
+        {
+            sb.AppendLine(string.Join(";", new[]
+            {
+                r.Protocol, r.Process, r.Pid.ToString(), r.Local, r.Remote, r.Country,
+                r.Host, r.State, r.Risk, r.Signature, r.Reason, r.Path
+            }.Select(Csv)));
+        }
+
+        try
+        {
+            // UTF-8 + BOM: Excel Türkçe karakterleri doğru gösterir.
+            File.WriteAllText(dialog.FileName, sb.ToString(), new UTF8Encoding(true));
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show("Dosya kaydedilemedi: " + ex.Message, "NetMonitor",
+                MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
+    }
+
+    private static string Csv(string value) => "\"" + value.Replace("\"", "\"\"") + "\"";
+
+    // ------------------------------------------------------------ yardımcılar
+
+    private static T? FindAncestor<T>(DependencyObject? d) where T : DependencyObject
+    {
+        while (d != null)
+        {
+            if (d is T match) return match;
+            d = d is Visual ? VisualTreeHelper.GetParent(d) : LogicalTreeHelper.GetParent(d);
+        }
+        return null;
+    }
+
+    private static ScrollViewer? FindScrollViewer(DependencyObject d)
+    {
+        if (d is ScrollViewer sv) return sv;
+        int count = VisualTreeHelper.GetChildrenCount(d);
+        for (int i = 0; i < count; i++)
+        {
+            var found = FindScrollViewer(VisualTreeHelper.GetChild(d, i));
+            if (found != null) return found;
+        }
+        return null;
+    }
+
+    private void FilterBox_TextChanged(object sender, TextChangedEventArgs e)
+    {
+        if (_ready) Refresh();
+    }
+
+    private void Option_Changed(object sender, RoutedEventArgs e)
+    {
+        if (_ready) Refresh();
+    }
 }
